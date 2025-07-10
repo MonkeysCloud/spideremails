@@ -193,23 +193,29 @@ def main(csv_in: str):
     print(f"Loaded {len(recipients)} unique addresses")
 
     failures, sent_total = defaultdict(list), 0
-    for batch_no, batch in enumerate(chunk(recipients, BATCH_SIZE), 1):
+    sent_in_window, window_start = 0, time.time()
+
+    for i, batch in enumerate(chunk(recipients, BATCH_SIZE), 1):
         sender  = random.choice(FROM_POOL)
         subject = random.choice(SUBJECT_POOL)
         html    = render_html(batch[0])
         ok, bad = send_batch(mg_domain, mg_key, sender, subject, batch, html)
-        sent_total += ok
-        if bad:
-            failures["failed"] += bad
-        print(f"[{datetime.now():%H:%M:%S}] Batch {batch_no}: sent {ok}/{len(batch)}, failures {len(bad)}")
-        # decide how long to wait before the *next* email
-        more_left = batch_no * BATCH_SIZE < len(recipients)
-        if not more_left:
-            break                                 # all done
+        sent_total     += ok
+        sent_in_window += ok
 
-        if batch_no % MAX_PER_WINDOW == 0:        # after every 100 messages
-            print(f"💤 cooling-off for {WINDOW_PAUSE/60:.0f} minutes …")
-            time.sleep(WINDOW_PAUSE)
+        more_left = i * BATCH_SIZE < len(recipients)
+        if not more_left:
+            break
+
+        # ——— control de caudal ———
+        if sent_in_window >= MAX_PER_WINDOW:
+            elapsed   = time.time() - window_start
+            sleep_for = max(0, WINDOW_PAUSE - elapsed)
+            print(f"💤 sended {sent_in_window} en "
+                  f"{elapsed/60:.1f} min → sleep {sleep_for/60:.1f} min")
+            time.sleep(sleep_for)
+            window_start   = time.time()
+            sent_in_window = 0
         else:
             time.sleep(SLEEP_BETWEEN)
     if failures:
