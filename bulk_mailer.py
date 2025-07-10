@@ -52,6 +52,8 @@ session.mount("https://", TLS12CloseAdapter(pool_connections=1, pool_maxsize=1))
 # ───────────────────────────────────
 BATCH_SIZE      = 1          # one recipient until domain warms up
 SLEEP_BETWEEN   = 10         # seconds between calls
+MAX_PER_WINDOW      = 100         # stop-after count
+WINDOW_PAUSE        = 65 * 60     # 65 minutes in seconds
 FROM_POOL       = [("Jorge Peraza", "jorge@monkeys.cloud")]
 SUBJECT_POOL    = ["MonkeysCloud | Pre-Series A opportunity"]
 TRACK_OPENS     = True
@@ -200,7 +202,15 @@ def main(csv_in: str):
         if bad:
             failures["failed"] += bad
         print(f"[{datetime.now():%H:%M:%S}] Batch {batch_no}: sent {ok}/{len(batch)}, failures {len(bad)}")
-        if batch_no * BATCH_SIZE < len(recipients):
+        # decide how long to wait before the *next* email
+        more_left = batch_no * BATCH_SIZE < len(recipients)
+        if not more_left:
+            break                                 # all done
+
+        if batch_no % MAX_PER_WINDOW == 0:        # after every 100 messages
+            print(f"💤 cooling-off for {WINDOW_PAUSE/60:.0f} minutes …")
+            time.sleep(WINDOW_PAUSE)
+        else:
             time.sleep(SLEEP_BETWEEN)
     if failures:
         with open(CSV_FAILURES_FILE, "w", newline="") as fh:
