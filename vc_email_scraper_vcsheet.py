@@ -1,157 +1,220 @@
-import asyncio, logging, re, time
-from urllib.parse import urlparse, urljoin
+#!/usr/bin/env python3
+"""
+vc_email_scraper_vcsheet.py  –  resilient parallel crawler
+(compatible with Playwright versions < 1.44)
+"""
 
-import aiohttp, pandas as pd
-from bs4 import BeautifulSoup, SoupStrainer
+from __future__ import annotations
+import asyncio, logging, os, re, time, json
+from urllib.parse import urlparse
+import tldextract
+import pandas as pd
+from playwright.async_api import (
+    async_playwright, TimeoutError as PWTimeout, Error as PWError
+)
 from tqdm.asyncio import tqdm
 
-# ─────────────────────────────────────────
-#  Common aliases we accept if found in text
-# ─────────────────────────────────────────
-COMMON_ALIASES = [
-    # … (same list as before, trimmed for brevity)
-    "info", "contact", "hello", "hi", "team", "office", "admin", "support",
-    "careers", "jobs", "hr", "ops", "webmaster", "postmaster",
-]
+# ─────────────────────────── CONFIG ────────────────────────────
+EMAIL_RE          = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
+OUT_CSV           = "vc_emails_vcsheet.csv"
 
-# ─────────────────────────────────────────
-#  CONFIG
-# ─────────────────────────────────────────
-OUT_CSV            = "vc_emails_vcsheet.csv"
-CONCURRENCY        = 15
-TIMEOUT            = aiohttp.ClientTimeout(total=25)
-MAX_DEPTH          = 6
-MAX_PAGES_PER_SITE = 200
-RETRIES            = 3
+MAX_DEPTH         = 6            # clicks per domain
+MAX_PAGES         = 40           # pages per domain
+PARALLEL_SITES    = 6            # ≤ simultaneous domains
+SITE_TIMEOUT      = 180          # seconds per whole domain
+NAV_TIMEOUT       = 30_000       # ms for page.goto
+SKIP_PAGE_BYTES   = 2_000_000    # ignore huge blobs (> ~2 MB)
 
-logging.basicConfig(
-    format="%(asctime)s %(levelname)s %(message)s",
-    datefmt="%H:%M:%S",
-    level=logging.INFO,
-)
+SOCIAL_SKIPS = {
+    "twitter.com", "x.com", "linkedin.com", "facebook.com", "medium.com",
+    "instagram.com", "youtube.com", "t.me", "github.com", "vcsheet.com",
+}
+
+logging.basicConfig(level=logging.INFO,
+                    format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-# ─────────────────────────────────────────
-#  Email extraction utilities (unchanged)
-# ─────────────────────────────────────────
-MAILTO_RE = re.compile(
-    r'href=["\']mailto:([A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,})', re.I
-)
-EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
-OBFUSCATED_RE = re.compile(
-    r"""
-    (?P<local>[A-Z0-9._%+-]+)
-    \s*(?:\(|\[|\{|\s)?\s*
-    (?:@|&\#64;|&commat;|\s+at\s+|\s*\[at\]\s*)
-    \s*(?:\)|\]|\}|\s)?\s*
-    (?P<host>[A-Z0-9.-]+
-        \s*(?:\.|dot|\[dot\]|\s+dot\s+)\s*
-        [A-Z]{2,})
-    """,
-    re.I | re.X,
-)
-
-def _norm_obfus(m: re.Match) -> str:
-    local = m.group("local")
-    host  = re.sub(r"\s*(?:dot|\[dot\]|\s+dot\s+)\s*", ".", m.group("host"), flags=re.I)
-    return f"{local}@{host}"
-
-def extract_emails(html: str, host: str) -> set[str]:
-    mailtos = set(MAILTO_RE.findall(html))
-    if mailtos:
-        return mailtos
-    raw  = set(EMAIL_RE.findall(html))
-    raw |= {_norm_obfus(m) for m in OBFSUCATED_RE.finditer(html)}
-    return {
-        e for e in raw
-        if e.split("@", 1)[0].lower() in COMMON_ALIASES and e.lower().endswith(host)
-    }
-
-# ─────────────────────────────────────────
-#  Helpers
-# ─────────────────────────────────────────
-def domain(u: str) -> str:
-    return urlparse(u).netloc.lower().removeprefix("www.")
-
-async def fetch(sess: aiohttp.ClientSession, url: str) -> str:
-    try:
-        async with sess.get(url, timeout=TIMEOUT, ssl=False) as r:
-            return await r.text()
-    except Exception as e:
-        log.debug(f"fetch {url} → {e}")
+# ───────────────────────── helpers ──────────────────────────
+def dom(url: str) -> str:
+    if not isinstance(url, str) or not url.startswith(("http://", "https://")):
         return ""
+    try:
+        h = urlparse(url).hostname or ""
+    except ValueError:
+        return ""
+    return h.lower().removeprefix("www.")
+_extract = tldextract.TLDExtract(cache_dir=False)
+def regdom(url: str) -> str:
+    """Registrable domain (eTLD+1) or ''."""
+    if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+        return ""
+    try:
+        ext = _extract(urlparse(url).hostname or "")
+    except ValueError:
+        return ""
+    if ext.domain and ext.suffix:
+        return f"{ext.domain}.{ext.suffix}".lower()
+    return ""
 
-# ─────────────────────────────────────────
-# 1. VC Sheet scraper (collect external websites)
-# ─────────────────────────────────────────
-VCSHEET_START = "https://www.vcsheet.com"
+def extract_emails(text: str, host_regdom: str) -> set[str]:
+    return {e for e in EMAIL_RE.findall(text)
+            if regdom("http://" + e.split("@", 1)[-1]) == host_regdom}
 
-async def vcsheet_sites(sess) -> list[str]:
-    log.info("VC Sheet: scraping fund list…")
-    html  = await fetch(sess, f"{VCSHEET_START}/funds")
-    soup  = BeautifulSoup(html, "html.parser")
-    slugs = {a["href"] for a in soup.select('a[href^="/funds/"]')}
-    log.info(f"  → Found {len(slugs)} fund cards")
+async def safe_goto(page, url: str) -> bool:
+    try:
+        await page.goto(url, timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
+        return True
+    except (PWTimeout, PWError):
+        log.debug(f"goto failed → {url}")
+        return False
 
-    sites = []
-    for slug in tqdm(slugs, desc="VC Sheet details"):
-        detail = await fetch(sess, urljoin(VCSHEET_START, slug))
-        for a in BeautifulSoup(detail, "html.parser", parse_only=SoupStrainer("a")):
-            href = a.get("href", "")
-            if href.startswith("http") and "vcsheet.com" not in href:
-                sites.append(href)
-    log.info(f"VC Sheet done → {len(sites)} external sites")
-    return sites
+# ───────────────────── VC-Sheet helpers ─────────────────────
+async def fund_links(page) -> list[str]:
+    # Fast path – Next.js payload
+    try:
+        data = await page.evaluate("window.__NEXT_DATA__")
+        funds = data["props"]["pageProps"].get("funds", [])
+        if funds:
+            return [f"https://www.vcsheet.com/fund/{f['slug']}" for f in funds]
+    except Exception:
+        pass
+    # Scroll fallback
+    seen: set[str] = set()
+    for _ in range(40):
+        seen.update(await page.eval_on_selector_all(
+            'a[href^="/fund"]', 'els=>els.map(e=>e.href)'))
+        if seen:
+            break
+        await page.mouse.wheel(0, 2800)
+        await page.wait_for_timeout(600)
+    return list(seen)
 
-# ─────────────────────────────────────────
-#  Crawl + email extraction
-# ─────────────────────────────────────────
-async def crawl_site(sess: aiohttp.ClientSession, root: str) -> set[str]:
-    seen, q, emails, pages = {root}, [(root, 0)], set(), 0
-    host = domain(root)
-    log.info(f"crawl -> {root}")
+async def website_links_from_detail(page) -> list[str]:
+    primary = await page.eval_on_selector_all(
+        'a:has-text("Website"), a:has-text("Visit")',
+        'els=>els.map(e=>e.href)')
+    if primary:
+        return primary
+    hrefs = await page.eval_on_selector_all(
+        'a[href^="http"]', 'els=>els.map(e=>e.href)')
+    for h in hrefs:
+        d = dom(h)
+        if d and d not in SOCIAL_SKIPS:
+            return [h]
+    return []
 
-    while q and pages < MAX_PAGES_PER_SITE:
+# ───────────────────── per-domain crawl ─────────────────────
+async def crawl_domain(browser, start_url: str) -> set[str]:
+    host = dom(start_url)
+    if not host:
+        return set()
+
+    ctx  = await browser.new_context()
+    page = await ctx.new_page()
+    q    = [(start_url.rstrip("/"), 0)]
+    seen = {q[0][0]}
+    pages = 0
+    emails: set[str] = set()
+
+    while q and pages < MAX_PAGES:
         url, depth = q.pop(0)
         pages += 1
-        html = await fetch(sess, url)
+        if not await safe_goto(page, url):
+            continue
+
+        # skip very large downloads
+        try:
+            size = page.response().headers.get("content-length")
+            if size and int(size) > SKIP_PAGE_BYTES:
+                continue
+        except Exception:
+            pass
+
+        try:
+            html = await page.content()
+        except PWError:
+            continue
+
         emails |= extract_emails(html, host)
 
-        if depth < MAX_DEPTH:
-            for a in BeautifulSoup(html, "html.parser", parse_only=SoupStrainer("a")):
-                nxt = urljoin(url, (a.get("href") or "").split("#")[0])
-                if nxt.startswith("http") and domain(nxt) == host and nxt not in seen:
-                    seen.add(nxt)
-                    q.append((nxt, depth + 1))
+        if depth >= MAX_DEPTH:
+            continue
 
-    log.info(f"   {root} → {len(emails)} emails ({pages} pages)")
+        try:
+            links = await page.eval_on_selector_all(
+                'a[href^="http"]', 'els=>els.map(e=>e.href)')
+        except PWError:
+            continue
+
+        for l in links:
+            if dom(l) == host:
+                l = l.rstrip("/")
+                if l not in seen:
+                    seen.add(l)
+                    q.append((l, depth + 1))
+
+    await ctx.close()
+    log.info(f"{host:<30} → {len(emails):2d} emails ({pages} pages)")
     return emails
 
-async def hunt_emails(sites: list[str]) -> list[tuple[str, str]]:
-    conn = aiohttp.TCPConnector(limit=CONCURRENCY, ssl=False)
-    async with aiohttp.ClientSession(connector=conn, timeout=TIMEOUT) as sess:
-        rows = []
-        for s in tqdm(sites, desc="Crawling sites"):
-            ems = await crawl_site(sess, s)
-            rows += [(s, e) for e in ems or [""]]
-        return rows
-
-# ─────────────────────────────────────────
-#  MAIN
-# ─────────────────────────────────────────
+# ───────────────────────────── main ─────────────────────────────
 async def main():
-    t0 = time.time()
-    async with aiohttp.ClientSession(timeout=TIMEOUT) as sess:
-        sites = await vcsheet_sites(sess)
+    started = time.time()
+    headless = os.getenv("HEADLESS", "1") != "0"
+    slow_mo  = 200 if not headless else 0
+    rows: list[tuple[str, str]] = []
 
-    sites = [s.rstrip("/") for s in sites]
-    log.info(f"Total unique firm domains to crawl: {len(sites)}")
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=headless, slow_mo=slow_mo)
+        page    = await browser.new_page()
 
-    rows = await hunt_emails(sites)
-    df   = pd.DataFrame(rows, columns=["website", "email"]).drop_duplicates()
-    df.to_csv(OUT_CSV, index=False)
+        await page.goto("https://www.vcsheet.com/funds", timeout=0)
+        for sel in ('input[type="email"]',
+                    'text="I have early access"',
+                    'text="Continue without invite"',
+                    'text="Enter site"'):
+            try:
+                if sel.startswith("input"):
+                    await page.fill(sel, "bot@example.com", timeout=2500)
+                    await page.keyboard.press("Enter")
+                else:
+                    await page.click(sel, timeout=2500)
+            except PWTimeout:
+                pass
 
-    log.info(f"✔ Wrote {len(df)} rows to {OUT_CSV} in {(time.time() - t0):.1f}s")
+        funds = await fund_links(page)
+        log.info(f"fund detail pages: {len(funds)}")
+
+        sites = []
+        for d in tqdm(funds, desc="fund pages"):
+            if not await safe_goto(page, d):
+                continue
+            sites += [s.rstrip("/") for s in await website_links_from_detail(page)]
+
+        sites = [s for s in dict.fromkeys(sites) if dom(s) and dom(s) not in SOCIAL_SKIPS]
+        log.info(f"website targets: {len(sites)}")
+
+        sem = asyncio.Semaphore(PARALLEL_SITES)
+
+        async def _crawl(site):
+            try:
+                async with sem:
+                    ems = await asyncio.wait_for(crawl_domain(browser, site),
+                                                 timeout=SITE_TIMEOUT)
+                return site, ems
+            except (asyncio.TimeoutError, PWError):
+                log.warning(f"{dom(site)} – crawl failed")
+                return site, set()
+
+        for site, emails in tqdm(await asyncio.gather(*[_crawl(s) for s in sites]),
+                                 total=len(sites), desc="website crawl"):
+            rows.extend((site, e) for e in (emails or {""}))
+
+        await browser.close()
+
+    pd.DataFrame(rows, columns=["website", "email"]).drop_duplicates()\
+        .to_csv(OUT_CSV, index=False)
+    log.info(f"✔ {len(rows)} rows → {OUT_CSV}  in {time.time()-started:.1f}s")
 
 if __name__ == "__main__":
     asyncio.run(main())
