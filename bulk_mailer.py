@@ -215,8 +215,9 @@ def send_via_monkeysmail(api_key: str, subject: str, recipient: str, html_body: 
     try:
         resp = session.post(url, json=payload, headers=headers, timeout=30)
         
-        if resp.status_code == 200:
-            print(f"✓ Sent to {recipient}")
+        # Accept 200, 201, 202 as success (different APIs return different codes)
+        if resp.status_code in (200, 201, 202):
+            print(f"✓ Sent to {recipient} (status: {resp.status_code})")
             return 1, []
         else:
             print(f"[WARN] Monkeysmail {resp.status_code}: {resp.text}", file=sys.stderr)
@@ -224,6 +225,22 @@ def send_via_monkeysmail(api_key: str, subject: str, recipient: str, html_body: 
     except Exception as e:
         print(f"[ERROR] Failed to send to {recipient}: {e}", file=sys.stderr)
         return 0, [recipient]
+
+
+# Track sent emails to prevent duplicates
+SENT_LOG_FILE = "sent_emails.log"
+
+def load_sent_emails() -> set[str]:
+    """Load already sent emails to prevent duplicates."""
+    if not os.path.exists(SENT_LOG_FILE):
+        return set()
+    with open(SENT_LOG_FILE, "r") as f:
+        return set(line.strip().lower() for line in f if line.strip())
+
+def log_sent_email(email: str):
+    """Log an email as sent."""
+    with open(SENT_LOG_FILE, "a") as f:
+        f.write(f"{email.lower()}\n")
 
 
 # ───────────────────────────────────
@@ -238,8 +255,19 @@ def main(csv_in: str):
     print("Using Monkeysmail API")
     print(f"From: {FROM_NAME} <{FROM_EMAIL}>")
     
+    # Load already sent emails to prevent duplicates
+    already_sent = load_sent_emails()
+    if already_sent:
+        print(f"⚠️  Found {len(already_sent)} already sent emails in {SENT_LOG_FILE}")
+    
     recipients = load_addresses(csv_in)
-    print(f"Loaded {len(recipients)} unique addresses")
+    # Filter out already sent
+    recipients = [r for r in recipients if r.lower() not in already_sent]
+    print(f"Loaded {len(recipients)} new addresses to send")
+    
+    if not recipients:
+        print("No new recipients to send to. Exiting.")
+        return
 
     all_failures, sent_total = [], 0
     sent_in_window, window_start = 0, time.time()
@@ -251,6 +279,11 @@ def main(csv_in: str):
         text = render_text(recipient)
         
         ok, bad = send_via_monkeysmail(api_key, subject, recipient, html, text)
+        
+        # Log successful send to prevent duplicates on restart
+        if ok > 0:
+            log_sent_email(recipient)
+        
         sent_total += ok
         sent_in_window += ok
         all_failures.extend(bad)
