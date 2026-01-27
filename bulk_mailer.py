@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-bulk_mailer.py – low-volume, low-noise outreach via Mailgun
+bulk_mailer.py – low-volume, low-noise outreach via Monkeysmail
 
 Setup
 =====
-  export MAILGUN_DOMAIN="mg.example.com"
-  export MAILGUN_API_KEY="key-xxxxxxxxxxxxxxxx"
+  export MONKEYSMAIL_API_KEY="your-api-key"
   python bulk_mailer.py emails.csv
 """
 
@@ -54,14 +53,19 @@ BATCH_SIZE      = 1          # one recipient until domain warms up
 SLEEP_BETWEEN   = 10         # seconds between calls
 MAX_PER_WINDOW      = 100         # stop-after count
 WINDOW_PAUSE        = 65 * 60     # 65 minutes in seconds
-FROM_POOL       = [("Jorge Peraza", "jorge@monkeys.cloud")]
-SUBJECT_POOL    = ["MonkeysCloud | Pre-Series A opportunity"]
-TRACK_OPENS     = True
-ATTACH_PATHS    = [          # <— attachments enabled again
-    "docs/MonkeysCloud.pdf",
-    "docs/MonkeysCloud-share.pdf",
-]
-CSV_FAILURES_FILE = "mailgun_failed.csv"
+
+# Monkeysmail configuration
+MONKEYSMAIL_API_BASE = "https://smtp.monkeysmail.com"
+FROM_EMAIL = "invest@colibriv.com"
+FROM_NAME = "ColibriV"
+REPLY_TO = "jorge@colibriv.com"
+SUBJECT_POOL = ["ColibriV — hydrogen turbofan propulsion (pre-seed / seed discussion)"]
+
+# CAN-SPAM Compliance
+COMPANY_ADDRESS = "6312 South Fiddlers Green Circle, Greenwood Village, CO 80111"
+UNSUBSCRIBE_EMAIL = "unsubscribe@colibriv.com"
+
+CSV_FAILURES_FILE = "monkeysmail_failed.csv"
 
 # ───────────────────────────────────
 # Helpers
@@ -84,144 +88,197 @@ def chunk(lst, n):
 
 
 def render_html(to_addr: str) -> str:
-    name = to_addr.split("@")[0]
+    name = to_addr.split("@")[0].replace(".", " ").replace("_", " ").title()
     return f"""
     <!DOCTYPE html>
     <html>
       <body style="font-family:Arial,Helvetica,sans-serif;line-height:1.45;color:#222">
-        <p style="margin:0 0 1em 0;">Hello {name},</p>
+        <p style="margin:0 0 1em 0;">Hi {name},</p>
 
         <p style="margin:0 0 1em 0;">
-          I hope all is well. I’m writing with exciting news about the
-          <strong>Monkeys ecosystem</strong> and the three phases that bring it to life:
+          I'm Jorge Peraza, founder of ColibriV. We're developing hydrogen-combustion turbofan propulsion as a practical, certification-first path to zero-carbon commercial aviation.
         </p>
 
-        <h3 style="margin:1.2em 0 0.4em 0; font-size:1.1em;">Phase 1 — MonkeysCloud (Specialised Hosting Platform) 🚀 <span style="color:#28a745;">launch-ready</span></h3>
         <p style="margin:0 0 1em 0;">
-          <a href="https://monkeys.cloud/" style="color:#0066cc;">MonkeysCloud</a> is no ordinary “all-in-one” tool; it’s a purpose-built hosting and
-          DevOps platform for modern web agencies and product teams. Think managed cloud
-          infrastructure with smart defaults: container orchestration, automatic SSL,
-          one-click rollbacks, and granular usage analytics—everything you need to ship
-          and scale projects without the usual ops overhead.
+          Our approach avoids cryogenic LH₂ and fuel-cell complexity by using compressed gaseous hydrogen, with a disciplined roadmap of <strong>engines first → aircraft next</strong>, aligned with FAA pathways (Denver-based leadership; testing in Guanacaste).
         </p>
 
-        <h3 style="margin:1.2em 0 0.4em 0; font-size:1.1em;">Phase 2 — MonkeysLegion (Open Framework &amp; Community) ⚙️ <span style="color:#f0ad4e;">open-source rollout</span></h3>
-        <p style="margin:0 0 1em 0;">
-          Under the hood, MonkeysCloud runs on <a href="https://monkeyslegion.com/" style="color:#0066cc;">MonkeysLegion</a>, our lightning-fast PHP framework.
-          By open-sourcing it we’ll grow a vibrant developer community, spark third-party
-          innovation, and ensure every future Monkeys product shares one robust codebase.
-        </p>
-
-        <h3 style="margin:1.2em 0 0.4em 0; font-size:1.1em;">Phase 3 — MonkeysCMS (AI-Powered Content Engine) 🤖 <span style="color:#d9534f;">in development</span></h3>
-        <p style="margin:0 0 1em 0;">
-          Built on MonkeysLegion, MonkeysCMS will let non-technical teams spin up fully
-          optimised sites in minutes. Features include generative AI for copy and images,
-          real-time SEO tuning, and smart layout suggestions—all deployable to
-          MonkeysCloud with a single click.
-        </p>
-
-        <h3 style="margin:1.5em 0 0.4em 0;">Key Highlights</h3>
+        <p style="margin:0 0 0.5em 0;">We're currently exploring:</p>
         <ul style="margin:0 0 1em 1.2em; padding:0;">
-          <li><strong>Launch-Ready Hosting:</strong> production-grade CI/CD, staging-to-prod pipelines, zero-downtime deploys.</li>
-          <li><strong>Strategic Partnership:</strong> $300 k in Google Cloud credits ensure rock-solid scalability from day one.</li>
-          <li><strong>Funding Objectives:</strong> launch MonkeysCloud, expand marketing, harden the platform, accelerate AI in both MonkeysLegion &amp; MonkeysCMS.</li>
+          <li>Pre-Seed / Seed funding to execute core propulsion milestones, or</li>
+          <li>a $100k–$300k bridge to close supplier MoUs and finalize safety &amp; test readiness</li>
         </ul>
 
-        <h3 style="margin:1.5em 0 0.4em 0;">Why Invest in Monkeys?</h3>
+        <p style="margin:0 0 0.5em 0;">Near-term deliverables include:</p>
         <ul style="margin:0 0 1em 1.2em; padding:0;">
-          <li><strong>Unified Stack:</strong> one framework powers hosting, framework, and upcoming CMS.</li>
-          <li><strong>Built-in Edge:</strong> automated testing, predictive error detection, AI-generated content, instant SEO insights.</li>
-          <li><strong>Clear Market Fit:</strong> agencies &amp; dev teams get a seamless path from commit → live.</li>
+          <li>Pressurized single-sector hot-fire tests</li>
+          <li>Initial NOx &amp; combustion stability maps</li>
+          <li>HAZOP/FMEA v1, PRD &amp; ventilation strategy</li>
+          <li>Complete safety &amp; certification plan (ARP/DO)</li>
+          <li>Supplier MoUs (tanks, valves, hydrogen partner)</li>
+          <li>Data Pack v1 (plots + test logs, under NDA)</li>
         </ul>
 
-        <p style="margin:0 0 1em 0;">
-          Your involvement could dramatically accelerate our roadmap and help us capture
-          this rapidly expanding market. I’d be thrilled to schedule a call at your
-          convenience.
+        <p style="margin:0 0 0.5em 0;">If helpful, you're welcome to review:</p>
+        <ul style="margin:0 0 1em 1.2em; padding:0;">
+          <li><strong>Investment deck:</strong> <a href="https://drive.google.com/file/d/17Y8MmCJ38wxAJn_ZgrsFKCiq7rrx07xz/view?usp=sharing" style="color:#0066cc;">View on Google Drive</a></li>
+          <li><strong>Business Plan:</strong> <a href="https://drive.google.com/file/d/15F371Up_ncpXoWTwGPAH8IU_E5pF4R8K/view" style="color:#0066cc;">View on Google Drive</a></li>
+          <li><strong>Project overview:</strong> <a href="https://colibriv.com" style="color:#0066cc;">colibriv.com</a></li>
+        </ul>
+
+        <p style="margin:0 0 1.5em 0;">
+          If this aligns with your focus, I'd appreciate the opportunity for a short introductory call.
         </p>
 
-        <p style="margin:0 0 1.5em 0;">Thank you for your time and consideration—I look forward to the possibility of collaborating.</p>
-
-        <p style="margin:0 0 0.2em 0;"><strong>Warm regards,</strong></p>
+        <p style="margin:0 0 0.2em 0;">Best regards,</p>
         <p style="margin:0;">
           Jorge Peraza<br>
-          CEO, <a href="https://monkeys.cloud/" style="color:#0066cc;">monkeys.cloud</a><br>
-          3000 Lawrence St #113&nbsp;· Denver, CO 80205-3422<br>
-          <a href="tel:+17209792811" style="color:#0066cc;">+1&nbsp;720-979-2811</a>
+          Founder, ColibriV<br>
+          <a href="mailto:jorge@colibriv.com" style="color:#0066cc;">jorge@colibriv.com</a> | <a href="https://colibriv.com" style="color:#0066cc;">colibriv.com</a>
+        </p>
+
+        <hr style="margin:2em 0 1em 0;border:none;border-top:1px solid #e0e0e0;">
+        <p style="margin:0;font-size:11px;color:#666;">
+          ColibriV · {COMPANY_ADDRESS}<br>
+          You received this because we believe our mission aligns with your investment focus.<br>
+          <a href="mailto:{UNSUBSCRIBE_EMAIL}?subject=Unsubscribe&body=Please%20remove%20me%20from%20your%20mailing%20list." style="color:#666;">Unsubscribe</a>
         </p>
       </body>
     </html>
     """
 
 
-def send_batch(domain: str, api_key: str, sender: tuple[str, str], subject: str, recipients: List[str], html_body: str) -> tuple[int, list[str]]:
-    url = f"https://api.mailgun.net/v3/{domain}/messages"
-    from_hdr = f"{sender[0]} <{sender[1]}>"
-    data = {
-        "from": from_hdr,
-        "to": recipients,
+def render_text(to_addr: str) -> str:
+    """Plain text version of the email."""
+    name = to_addr.split("@")[0].replace(".", " ").replace("_", " ").title()
+    return f"""Hi {name},
+
+I'm Jorge Peraza, founder of ColibriV. We're developing hydrogen-combustion turbofan propulsion as a practical, certification-first path to zero-carbon commercial aviation.
+
+Our approach avoids cryogenic LH₂ and fuel-cell complexity by using compressed gaseous hydrogen, with a disciplined roadmap of engines first → aircraft next, aligned with FAA pathways (Denver-based leadership; testing in Guanacaste).
+
+We're currently exploring:
+• Pre-Seed / Seed funding to execute core propulsion milestones, or
+• a $100k–$300k bridge to close supplier MoUs and finalize safety & test readiness
+
+Near-term deliverables include:
+• Pressurized single-sector hot-fire tests
+• Initial NOx & combustion stability maps
+• HAZOP/FMEA v1, PRD & ventilation strategy
+• Complete safety & certification plan (ARP/DO)
+• Supplier MoUs (tanks, valves, hydrogen partner)
+• Data Pack v1 (plots + test logs, under NDA)
+
+If helpful, you're welcome to review:
+• Investment deck: https://drive.google.com/file/d/17Y8MmCJ38wxAJn_ZgrsFKCiq7rrx07xz/view?usp=sharing
+• Business Plan: https://drive.google.com/file/d/15F371Up_ncpXoWTwGPAH8IU_E5pF4R8K/view
+• Project overview: https://colibriv.com
+
+If this aligns with your focus, I'd appreciate the opportunity for a short introductory call.
+
+Best regards,
+Jorge Peraza
+Founder, ColibriV
+jorge@colibriv.com | colibriv.com
+
+---
+ColibriV · {COMPANY_ADDRESS}
+You received this because we believe our mission aligns with your investment focus.
+To unsubscribe, reply to {UNSUBSCRIBE_EMAIL} with "Unsubscribe" in the subject.
+"""
+
+
+def send_via_monkeysmail(api_key: str, subject: str, recipient: str, html_body: str, text_body: str) -> tuple[int, list[str]]:
+    """Send email via Monkeysmail API."""
+    url = f"{MONKEYSMAIL_API_BASE}/messages/send"
+    
+    payload = {
+        "from": {"email": FROM_EMAIL, "name": FROM_NAME},
+        "to": [recipient],
         "subject": subject,
         "html": html_body,
-        "o:tracking": "yes" if TRACK_OPENS else "no",
-        "o:tag": ["outreach", "monkeyscloud"],
+        "text": text_body,
+        "reply_to": REPLY_TO,
+        "tags": ["outreach", "colibriv", "investor"],
+        # CAN-SPAM compliance headers
+        "headers": {
+            "List-Unsubscribe": f"<mailto:{UNSUBSCRIBE_EMAIL}?subject=Unsubscribe>",
+            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+        },
     }
-    files = [
-        ("attachment", (os.path.basename(p), open(p, "rb")))
-        for p in ATTACH_PATHS if os.path.isfile(p)
-    ]
+    
+    headers = {
+        "Content-Type": "application/json",
+        "X-API-Key": api_key,
+    }
+    
     try:
-        resp = session.post(url, auth=("api", api_key), data=data, files=files, timeout=30, allow_redirects=False)
-    finally:
-        for _, (_, fh) in files:
-            fh.close()
-    if resp.status_code == 200:
-        return len(recipients), []
-    print(f"[WARN] Mailgun {resp.status_code}: {resp.text}", file=sys.stderr)
-    return 0, recipients
+        resp = session.post(url, json=payload, headers=headers, timeout=30)
+        
+        if resp.status_code == 200:
+            print(f"✓ Sent to {recipient}")
+            return 1, []
+        else:
+            print(f"[WARN] Monkeysmail {resp.status_code}: {resp.text}", file=sys.stderr)
+            return 0, [recipient]
+    except Exception as e:
+        print(f"[ERROR] Failed to send to {recipient}: {e}", file=sys.stderr)
+        return 0, [recipient]
+
 
 # ───────────────────────────────────
 # Main
 # ───────────────────────────────────
 
 def main(csv_in: str):
-    mg_domain = os.getenv("MAILGUN_DOMAIN")
-    mg_key    = os.getenv("MAILGUN_API_KEY")
-    if not (mg_domain and mg_key):
-        sys.exit("Set MAILGUN_DOMAIN and MAILGUN_API_KEY env vars first.")
-    print("Using Mailgun domain:", mg_domain)
+    api_key = os.getenv("MONKEYSMAIL_API_KEY")
+    if not api_key:
+        sys.exit("Set MONKEYSMAIL_API_KEY env var first.")
+    
+    print("Using Monkeysmail API")
+    print(f"From: {FROM_NAME} <{FROM_EMAIL}>")
+    
     recipients = load_addresses(csv_in)
     print(f"Loaded {len(recipients)} unique addresses")
 
-    failures, sent_total = defaultdict(list), 0
+    all_failures, sent_total = [], 0
     sent_in_window, window_start = 0, time.time()
 
     for i, batch in enumerate(chunk(recipients, BATCH_SIZE), 1):
-        sender  = random.choice(FROM_POOL)
         subject = random.choice(SUBJECT_POOL)
-        html    = render_html(batch[0])
-        ok, bad = send_batch(mg_domain, mg_key, sender, subject, batch, html)
-        sent_total     += ok
+        recipient = batch[0]
+        html = render_html(recipient)
+        text = render_text(recipient)
+        
+        ok, bad = send_via_monkeysmail(api_key, subject, recipient, html, text)
+        sent_total += ok
         sent_in_window += ok
+        all_failures.extend(bad)
 
         more_left = i * BATCH_SIZE < len(recipients)
         if not more_left:
             break
 
-        # ——— control de caudal ———
+        # ——— rate limiting ———
         if sent_in_window >= MAX_PER_WINDOW:
-            elapsed   = time.time() - window_start
+            elapsed = time.time() - window_start
             sleep_for = max(0, WINDOW_PAUSE - elapsed)
-            print(f"💤 sended {sent_in_window} en "
-                  f"{elapsed/60:.1f} min → sleep {sleep_for/60:.1f} min")
+            print(f"💤 Sent {sent_in_window} in "
+                  f"{elapsed/60:.1f} min → sleeping {sleep_for/60:.1f} min")
             time.sleep(sleep_for)
-            window_start   = time.time()
+            window_start = time.time()
             sent_in_window = 0
         else:
             time.sleep(SLEEP_BETWEEN)
-    if failures:
+    
+    if all_failures:
         with open(CSV_FAILURES_FILE, "w", newline="") as fh:
-            csv.writer(fh).writerows([[e] for e in failures["failed"]])
-        print(f"❗  {len(failures['failed'])} failures written to {CSV_FAILURES_FILE}")
+            writer = csv.writer(fh)
+            writer.writerow(["email"])
+            for email in all_failures:
+                writer.writerow([email])
+        print(f"❗  {len(all_failures)} failures written to {CSV_FAILURES_FILE}")
+    
     print(f"✔  Finished — total delivered {sent_total}")
 
 
