@@ -75,7 +75,8 @@ def load_addresses(csv_path: str) -> list[str]:
     seen, keep = set(), []
     with open(csv_path, newline="") as fh:
         for row in csv.DictReader(fh):
-            em = row.get("email", "").strip().lower()
+            # Support both 'email' and 'Email'
+            em = row.get("email", row.get("Email", "")).strip().lower()
             if em and "@" in em and em not in seen:
                 seen.add(em)
                 keep.append(em)
