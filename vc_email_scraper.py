@@ -176,7 +176,10 @@ async def crawl_site(sess: aiohttp.ClientSession, root: str) -> set[str]:
 # ─────────────────────────────────────────
 async def hunt_emails(sites: list[str]) -> list[tuple[str, str]]:
     conn = aiohttp.TCPConnector(limit=CONCURRENCY, ssl=False)
-    async with aiohttp.ClientSession(connector=conn, timeout=TIMEOUT) as sess:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    async with aiohttp.ClientSession(connector=conn, timeout=TIMEOUT, headers=headers) as sess:
         rows: list[tuple[str, str]] = []
         sem  = asyncio.Semaphore(CONCURRENCY)
 

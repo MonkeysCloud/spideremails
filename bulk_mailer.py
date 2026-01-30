@@ -106,7 +106,7 @@ def render_html(to_addr: str) -> str:
         <p style="margin:0 0 0.5em 0;">We're currently exploring:</p>
         <ul style="margin:0 0 1em 1.2em; padding:0;">
           <li>Pre-Seed / Seed funding to execute core propulsion milestones, or</li>
-          <li>a $100k–$300k bridge to close supplier MoUs and finalize safety &amp; test readiness</li>
+          <li>A $100k–$300k bridge round ahead of our U.S. Regulation Crowdfunding raise; we've already been accepted by StartEngine.</li>
         </ul>
 
         <p style="margin:0 0 0.5em 0;">Near-term deliverables include:</p>
