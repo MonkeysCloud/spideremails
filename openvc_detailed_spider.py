@@ -215,57 +215,44 @@ async def run_spider(pw):
     for page_num in range(START_PAGE, MAX_PAGES + 1):
         log.info(f"Processing page {page_num}...")
 
-        # Navigate if needed
-        target_url_fragment = f"page={page_num}"
-        if target_url_fragment not in page.url:
-             # Construct full search URL with page param
-             # We assume basic search params. If user has filters, they should be preserved if we just append &page=
-             # But simplistic apporach:
-             if "?" in page.url:
-                 # Regex or url parse to replace page param would be better, 
-                 # but let's just rely on the user having set filters and us stepping through.
-                 # Actually, OpenVC url structure is `search?s=...&page=X`
-                 current_url = page.url
-                 if "page=" in current_url:
-                     import re
-                     next_url = re.sub(r'page=\d+', f'page={page_num}', current_url)
-                 else:
-                     next_url = current_url + f"&page={page_num}"
-                 
-                 await page.goto(next_url, timeout=60000)
-                 
-                 # Cloudflare / Protection Handling
-                 try:
-                     await page.wait_for_selector('a.VClink', timeout=30000)
-                 except Exception:
-                     log.warning("Timeout waiting for funds. Checking for Cloudflare/CAPTCHA...")
-                     # Loop while Cloudflare is present or funds are missing
-                     while True:
-                         title = await page.title()
-                         content = await page.content()
-                         
-                         if "Just a moment" in title or "challenge" in content.lower() or "cloudflare" in content.lower():
-                             log.warning("Cloudflare detected! Please solve the CAPTCHA in the browser window.")
-                             log.info("Waiting 10s...")
-                             await asyncio.sleep(10)
-                             
-                             # Check if solved
-                             try:
-                                 if await page.query_selector('a.VClink'):
-                                     log.info("CAPTCHA solved! Resuming...")
-                                     break
-                             except:
-                                 pass
-                         else:
-                             # Maybe just a slow load or empty page?
-                             # Try one more wait or break if truly empty
-                             if await page.query_selector('a.VClink'):
-                                 break
-                             else:
-                                 log.error("No funds found and not obviously Cloudflare. Stopping.")
-                                 break
+        # Always navigate to the correct page
+        target_url = f"{OPENVC_START_URL}?page={page_num}"
+        
+        if f"page={page_num}" not in page.url:
+            log.info(f"Navigating to {target_url}")
+            await page.goto(target_url, timeout=60000)
+            
+            # Cloudflare / Protection Handling
+            try:
+                await page.wait_for_selector('a.VClink', timeout=30000)
+            except Exception:
+                log.warning("Timeout waiting for funds. Checking for Cloudflare/CAPTCHA...")
+                # Loop while Cloudflare is present or funds are missing
+                while True:
+                    title = await page.title()
+                    content = await page.content()
+                    
+                    if "Just a moment" in title or "challenge" in content.lower() or "cloudflare" in content.lower():
+                        log.warning("Cloudflare detected! Please solve the CAPTCHA in the browser window.")
+                        log.info("Waiting 10s...")
+                        await asyncio.sleep(10)
+                        
+                        # Check if solved
+                        try:
+                            if await page.query_selector('a.VClink'):
+                                log.info("CAPTCHA solved! Resuming...")
+                                break
+                        except:
+                            pass
+                    else:
+                        # Maybe just a slow load or empty page?
+                        if await page.query_selector('a.VClink'):
+                            break
+                        else:
+                            log.error("No funds found and not obviously Cloudflare. Stopping.")
+                            break
 
-                 await asyncio.sleep(random.uniform(5, 8))
+            await asyncio.sleep(random.uniform(5, 8))
 
         # Get all funding cards
         fund_links = await page.query_selector_all('td.nameCell a.VClink')
