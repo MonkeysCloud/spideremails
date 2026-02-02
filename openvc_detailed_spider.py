@@ -45,22 +45,36 @@ async def download_logo(page, url, fund_name):
         filename = f"{safe_name}.{ext}"
         filepath = os.path.join(LOGOS_DIR, filename)
         
-        # Don't re-download if exists
         if os.path.exists(filepath):
             log.info(f"Logo already exists: {filepath}")
             return filepath
             
-        # Use page context to get proper cookies/headers
-        response = await page.context.request.get(url)
-        if response.status == 200:
-            data = await response.body()
+        # Use page evaluation to fetch data as base64 (ensure headers/cookies are perfect)
+        base64_data = await page.evaluate('''async (url) => {
+            try {
+                const response = await fetch(url);
+                if (response.status !== 200) return null;
+                const blob = await response.blob();
+                return new Promise((resolve) => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => resolve(reader.result);
+                    reader.readAsDataURL(blob);
+                });
+            } catch (e) { return null; }
+        }''', url)
+
+        if base64_data:
+            # Data URL format: "data:image/jpeg;base64,/9j/4AAQ..."
+            import base64
+            header, encoded = base64_data.split(",", 1)
+            data = base64.b64decode(encoded)
             with open(filepath, 'wb') as f:
                 f.write(data)
             log.info(f"Downloaded logo to {filepath}")
             return filepath
         else:
-            log.warning(f"Failed to download logo: status {response.status}")
-
+            log.warning(f"Failed to download logo (fetch): {url}")
+            
     except Exception as e:
         log.warning(f"Failed to download logo for {fund_name}: {e}")
     return None
@@ -269,6 +283,15 @@ async def run_spider(pw):
             break
 
         for i, card in enumerate(cards):
+            # Check for dupes BEFORE clicking
+            try:
+                href = await card.get_attribute('href')
+                if href and href in existing_urls:
+                    log.info(f"Skipping {href} (Already extracted)")
+                    continue
+            except Exception:
+                pass
+
             # Wait Logic
             await asyncio.sleep(random.uniform(10, 15)) # 3-5x slower than naive to be safe
             
