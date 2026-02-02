@@ -22,8 +22,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-async def download_logo(url, fund_name):
-    """Downloads the logo image and saves it locally."""
+async def download_logo(page, url, fund_name):
+    """Downloads the logo image and saves it locally using the browser context."""
     if not url:
         return None
     
@@ -50,20 +50,17 @@ async def download_logo(url, fund_name):
             log.info(f"Logo already exists: {filepath}")
             return filepath
             
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Referer": "https://www.openvc.app/"
-        }
-        async with aiohttp.ClientSession(headers=headers) as session:
-            async with session.get(url) as resp:
-                if resp.status == 200:
-                    data = await resp.read()
-                    with open(filepath, 'wb') as f:
-                        f.write(data)
-                    log.info(f"Downloaded logo to {filepath}")
-                    return filepath
-                else:
-                    log.warning(f"Failed to download logo: status {resp.status}")
+        # Use page context to get proper cookies/headers
+        response = await page.context.request.get(url)
+        if response.status == 200:
+            data = await response.body()
+            with open(filepath, 'wb') as f:
+                f.write(data)
+            log.info(f"Downloaded logo to {filepath}")
+            return filepath
+        else:
+            log.warning(f"Failed to download logo: status {response.status}")
+
     except Exception as e:
         log.warning(f"Failed to download logo for {fund_name}: {e}")
     return None
@@ -91,7 +88,7 @@ async def extract_modal_data(page):
         data['Logo URL'] = logo_url
         
         if logo_url and data['Fund Name']:
-             data['Local Logo Path'] = await download_logo(logo_url, data['Fund Name'])
+             data['Local Logo Path'] = await download_logo(page, logo_url, data['Fund Name'])
 
         # Socials
         social_links = await page.query_selector_all('#socialIcons a')
